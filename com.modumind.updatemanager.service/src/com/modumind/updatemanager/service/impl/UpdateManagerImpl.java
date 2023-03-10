@@ -260,7 +260,7 @@ public class UpdateManagerImpl implements UpdateManager {
 		 * current profile.
 		 */
 		for (IInstallableUnit iu : iusInRepo) {
-			if (iu.getId().endsWith(".feature.feature.group")) {
+			if (iu.getId().endsWith(".feature.group")) {
 				if (profile.query(QueryUtil.createIUQuery(iu.getId()), null).isEmpty()) {
 					this.log("Found IU to install: " + iu.getId());
 					if (shouldFeatureBeInstalled(iu))
