@@ -33,4 +33,11 @@ public interface UpdateManager {
 	 * @throws ProvisionException
 	 */
 	public boolean performAutoUpdate();
+
+	/**
+	 * Check if there is any available update
+	 * 
+	 * @return <code>true</code> is any update is available
+	 */
+	public boolean needUpdate();
 }

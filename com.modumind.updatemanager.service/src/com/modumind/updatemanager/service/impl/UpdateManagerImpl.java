@@ -89,6 +89,16 @@ public class UpdateManagerImpl implements UpdateManager {
 		this.logger = logger;
 	}
 
+	@Override
+	public boolean needUpdate() {
+		IProvisioningAgent agent = getAgent();
+		if (agent == null) {
+			return false;
+		}
+		ProvisioningSession session = new ProvisioningSession(agent);
+		return hasUpdate(session) || hasInstall(session);
+	}
+
 	/* Public methods */
 
 	@Override
@@ -111,11 +121,8 @@ public class UpdateManagerImpl implements UpdateManager {
 		/*
 		 * Get access to the profile to be updated and create a provisioning session.
 		 */
-		IProvisioningAgent agent = null;
-		try {
-			agent = this.provisioingAgentProvider.createAgent(null);
-		} catch (ProvisionException e) {
-			this.log("Error creating provisioning agent - " + e.getMessage(), e);
+		IProvisioningAgent agent = getAgent();
+		if (agent == null) {
 			return false;
 		}
 
@@ -139,13 +146,24 @@ public class UpdateManagerImpl implements UpdateManager {
 		log("Process installs");
 		log("----------------------------------------------------------------");
 		runProvisioningJob(getInstallJob(session));
-		
+
 		agent.stop();
 
 		log("----------------------------------------------------------------");
 		log("Auto-update processing complete. Return restart flag: " + isJustUpdated());
 		log("----------------------------------------------------------------");
 		return isJustUpdated();
+	}
+
+	protected IProvisioningAgent getAgent() {
+		IProvisioningAgent agent = null;
+		try {
+			agent = this.provisioingAgentProvider.createAgent(null);
+		} catch (ProvisionException e) {
+			this.log("Error creating provisioning agent - " + e.getMessage(), e);
+			return null;
+		}
+		return agent;
 	}
 
 	/* Private methods */
@@ -232,6 +250,69 @@ public class UpdateManagerImpl implements UpdateManager {
 		return null;
 	}
 
+	private boolean hasUpdate(ProvisioningSession provisioningSession) {
+		IStatus loadStatus;
+
+		if ((loadStatus = loadP2Repository(provisioningSession.getProvisioningAgent())) != Status.OK_STATUS) {
+			return false;
+		}
+
+		UpdateOperation updateOperation = new UpdateOperation(provisioningSession);
+		IStatus updateOperationStatus = updateOperation.resolveModal(new NullProgressMonitor());
+
+		if (updateOperationStatus.getCode() == UpdateOperation.STATUS_NOTHING_TO_UPDATE) {
+			return false;
+		}
+
+		if (updateOperation.hasResolved()) {
+			this.log("Update operation resolved successfully");
+
+			Update[] possibleUpdates = updateOperation.getPossibleUpdates();
+
+			return possibleUpdates.length > 0;
+		}
+
+		return false;
+	}
+
+	private boolean hasInstall(ProvisioningSession provisioningSession) {
+		IStatus loadStatus = loadP2Repository(provisioningSession.getProvisioningAgent());
+		if (loadStatus != Status.OK_STATUS) {
+			dumpStatus(loadStatus);
+			return false;
+		}
+
+		IProfile profile = profileRegistry.getProfile(IProfileRegistry.SELF);
+		if (profile == null) {
+			return false;
+		}
+
+		/*
+		 * Query the metadata repository for the latest features to install.
+		 */
+		Collection<IInstallableUnit> iusInRepo = metadataRepository
+				.query(QueryUtil.createLatestIUQuery(), new NullProgressMonitor()).toUnmodifiableSet();
+
+		List<IInstallableUnit> iusToInstall = new ArrayList<IInstallableUnit>();
+		this.log("IUs to install (possibly " + iusInRepo.size() + "):");
+
+		/*
+		 * Search for IUs that end in feature.feature.group and that are not in the
+		 * current profile.
+		 */
+		for (IInstallableUnit iu : iusInRepo) {
+			if (iu.getId().endsWith(".feature.feature.group")) {
+				if (profile.query(QueryUtil.createIUQuery(iu.getId()), null).isEmpty()) {
+					this.log("Found IU to install: " + iu.getId());
+					if (shouldFeatureBeInstalled(iu))
+						iusToInstall.add(iu);
+				}
+			}
+		}
+		return !iusInRepo.isEmpty();
+
+	}
+
 	private ProvisioningJob getInstallJob(ProvisioningSession provisioningSession) {
 		IStatus loadStatus = loadP2Repository(provisioningSession.getProvisioningAgent());
 		if (loadStatus != Status.OK_STATUS) {
@@ -288,28 +369,29 @@ public class UpdateManagerImpl implements UpdateManager {
 
 		return null;
 	}
-	
+
 	private void runProvisioningJob(ProvisioningJob job) {
 		if (job == null) {
 			return;
 		}
-		
+
 		try {
 			new ProgressMonitorDialog(null).run(true, false, new IRunnableWithProgress() {
-				
+
 				@Override
-				public void run(IProgressMonitor monitor) throws InvocationTargetException, InterruptedException {						IStatus status = job.runModal(monitor);
-						if (status.getSeverity() != IStatus.ERROR) {
-							log("Provisioning job completed succesfully. Setting restart flag to true");
-							setJustUpdated(true);
-						} else {
-							log(status.getException().getMessage(), status.getException());
-						}
+				public void run(IProgressMonitor monitor) throws InvocationTargetException, InterruptedException {
+					IStatus status = job.runModal(monitor);
+					if (status.getSeverity() != IStatus.ERROR) {
+						log("Provisioning job completed succesfully. Setting restart flag to true");
+						setJustUpdated(true);
+					} else {
+						log(status.getException().getMessage(), status.getException());
+					}
 				}
 			});
 		} catch (Exception e) {
 			log("Uncaught exception occurred during job execution", e);
-		} 
+		}
 		return;
 	}
 
@@ -329,7 +411,7 @@ public class UpdateManagerImpl implements UpdateManager {
 			this.log("Error setting just updated flag - " + e.getMessage(), e);
 		}
 	}
-	
+
 	private boolean isJustUpdated() {
 		final IEclipsePreferences preferences = InstanceScope.INSTANCE.getNode(PLUGIN_ID);
 		return preferences.getBoolean(JUSTUPDATED, false);
@@ -375,4 +457,5 @@ public class UpdateManagerImpl implements UpdateManager {
 
 		logger.log(message, e);
 	}
+
 }
